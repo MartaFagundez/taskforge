@@ -22,6 +22,12 @@ const CreateTask = z.object({
   title: z.string().min(1, 'El título es requerido'),
   projectId: z.number().int().positive('projectId inválido'),
 });
+const ListTasksQuery = z.object({
+  status: z.enum(['all', 'done', 'pending']).default('all'),
+  q: z.string().trim().optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(10),
+});
 const IdParam = z.object({ id: z.coerce.number().int().positive() });
 const CreateProject = z.object({
   name: z.string().min(1, 'El nombre es requerido'),
@@ -57,6 +63,71 @@ app.post('/projects', async (req, res) => {
     res.status(201).json(project);
   } catch (err) {
     console.error('[POST /projects] error', err);
+    return res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+// Listar tareas de un proyecto con filtros y paginación
+app.get('/projects/:id/tasks', async (req, res) => {
+  const projectId = Number(req.params.id);
+  if (!Number.isInteger(projectId) || projectId <= 0)
+    return res.status(400).json({ error: 'projectId inválido' });
+
+  const parsed = ListTasksQuery.safeParse(req.query);
+  if (!parsed.success) {
+    const { formErrors, fieldErrors } = z.flattenError(parsed.error);
+    return res.status(400).json({
+      error: 'Parámetros de consulta inválidos',
+      formErrors,
+      fieldErrors,
+    });
+  }
+  const qp = parsed.data;
+
+  // Construimos el filtro dinámicamente
+  const where: any = { projectId };
+  if (qp.status === 'done') where.done = true;
+  if (qp.status === 'pending') where.done = false;
+  // En mis pruebas verifico que contains es case-insensitive en SQLite, aunque la documentación especifica lo contario: https://www.prisma.io/docs/orm/prisma-client/queries/case-sensitivity#sqlite-provider
+  // Al momento de migrar a postrgre habrá que verificar este comportamiento
+  if (qp.q) where.title = { contains: qp.q };
+
+  try {
+    const projectExists = await prisma.project.findUnique({
+      where: { id: projectId },
+    });
+    if (!projectExists) {
+      return res.status(404).json({ error: 'Proyecto no encontrado' });
+    }
+
+    // Primero obtenemos el total para validar la página
+    const total = await prisma.task.count({ where });
+    const maxPages = Math.ceil(total / qp.limit);
+
+    // Si se solicita una página que no existe
+    if (qp.page > 1 && qp.page > maxPages) {
+      return res.status(404).json({
+        error: `Página ${qp.page} no existe. Páginas disponibles: 1-${maxPages > 0 ? maxPages : 1}`,
+      });
+    }
+
+    const skip = (qp.page - 1) * qp.limit;
+    const items = await prisma.task.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: qp.limit,
+    });
+
+    res.json({
+      items,
+      page: qp.page,
+      limit: qp.limit,
+      total,
+      pages: maxPages,
+    });
+  } catch (err) {
+    console.error('[GET /projects/:id/tasks] error', err);
     return res.status(500).json({ error: 'Error interno' });
   }
 });
