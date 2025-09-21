@@ -20,10 +20,46 @@ app.get('/health', (_req, res) => {
 // Zod schemas
 const CreateTask = z.object({
   title: z.string().min(1, 'El título es requerido'),
+  projectId: z.number().int().positive('projectId inválido'),
 });
 const IdParam = z.object({ id: z.coerce.number().int().positive() });
+const CreateProject = z.object({
+  name: z.string().min(1, 'El nombre es requerido'),
+});
 
-// Endpoints V1
+// Endpoints V2
+// Listar proyectos
+app.get('/projects', async (_req, res) => {
+  try {
+    const projects = await prisma.project.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+    res.json(projects);
+  } catch (err) {
+    console.error('[GET /projects] error', err);
+    return res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+// Crear proyecto
+app.post('/projects', async (req, res) => {
+  const parsed = CreateProject.safeParse(req.body);
+  if (!parsed.success) {
+    const { formErrors, fieldErrors } = z.flattenError(parsed.error);
+    // formErrors: errores a nivel de formulario (path: [])
+    // fieldErrors: mapa de campo -> string[]
+    return res.status(400).json({ formErrors, fieldErrors });
+  }
+  try {
+    const project = await prisma.project.create({
+      data: { name: parsed.data.name },
+    });
+    res.status(201).json(project);
+  } catch (err) {
+    console.error('[POST /projects] error', err);
+    return res.status(500).json({ error: 'Error interno' });
+  }
+});
 
 // Listar tareas
 app.get('/tasks', async (_req, res) => {
@@ -43,14 +79,21 @@ app.post('/tasks', async (req, res) => {
   const parsed = CreateTask.safeParse(req.body);
   if (!parsed.success) {
     const { formErrors, fieldErrors } = z.flattenError(parsed.error);
-    // formErrors: errores a nivel de formulario (path: [])
-    // fieldErrors: mapa de campo -> string[]
     return res.status(400).json({ formErrors, fieldErrors });
   }
 
   try {
+    const projectExists = await prisma.project.findUnique({
+      where: { id: parsed.data.projectId },
+    });
+    if (!projectExists) {
+      return res.status(400).json({
+        error: 'El projectId no corresponde a un proyecto existente',
+      });
+    }
+
     const task = await prisma.task.create({
-      data: { title: parsed.data.title },
+      data: { title: parsed.data.title, projectId: parsed.data.projectId },
     });
     return res.status(201).json(task);
   } catch (err) {
