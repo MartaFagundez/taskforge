@@ -1,0 +1,25 @@
+{
+  "name": "taskforge",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "backend",
+    "infra"
+  ],
+  "scripts": {
+    "dev": "concurrently -n back,front -c auto \"npm:dev -w backend\" \"npm:dev -w frontend\"",
+    "build": "npm run -w backend build && npm run -w frontend build",
+    "lint": "eslint .",
+    "format": "prettier -w ."
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.3.0"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": ""
+}
