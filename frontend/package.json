@@ -10,6 +10,8 @@
     "preview": "vite preview --port 4173"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.89.0",
+    "axios": "^1.12.2",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },
