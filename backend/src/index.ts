@@ -4,7 +4,7 @@ import cors from 'cors';
 import * as z from 'zod';
 import { prisma } from './prisma';
 import { Prisma } from '@prisma/client';
-import { getUploadUrl, getDownloadUrl, S3_BUCKET } from './s3';
+import { getUploadUrl, getDownloadUrl, deleteObject, S3_BUCKET } from './s3';
 import crypto from 'crypto';
 
 const app = express();
@@ -362,6 +362,38 @@ app.get('/attachments/download', async (req, res) => {
     return res.json({ url });
   } catch (err) {
     console.error('[GET /attachments/download] error', err);
+    return res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+// Eliminar un adjunto (S3 + DB)
+app.delete('/attachments/:id', async (req, res) => {
+  const parsed = IdParam.safeParse(req.params);
+  if (!parsed.success)
+    return res.status(400).json({ error: 'Parámetro id inválido' });
+  const { id } = parsed.data;
+
+  try {
+    const att = await prisma.attachment.findUnique({ where: { id } });
+    if (!att) return res.status(404).json({ error: 'Adjunto no encontrado' });
+
+    // 1) Borrar en S3 (idempotente: si no existe, S3 no rompe)
+    try {
+      await deleteObject(att.key);
+    } catch (e) {
+      // Si S3 falla, corta y reporta; evita orfandad de archivo
+      console.error('[DELETE S3 object] error', e);
+      return res
+        .status(502)
+        .json({ error: 'No fue posible borrar el archivo en S3' });
+    }
+
+    // 2) Borrar metadatos en DB
+    await prisma.attachment.delete({ where: { id } });
+
+    return res.status(204).send();
+  } catch (err) {
+    console.error('[DELETE /attachments/:id] error', err);
     return res.status(500).json({ error: 'Error interno' });
   }
 });
