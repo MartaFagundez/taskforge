@@ -2,6 +2,7 @@ import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
+  DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
@@ -30,4 +31,9 @@ export async function getDownloadUrl(key: string) {
   const cmd = new GetObjectCommand({ Bucket: S3_BUCKET, Key: key });
   // expira en 2 min
   return getSignedUrl(s3, cmd, { expiresIn: 60 * 2 });
+}
+
+export async function deleteObject(key: string) {
+  const cmd = new DeleteObjectCommand({ Bucket: S3_BUCKET, Key: key });
+  await s3.send(cmd);
 }
