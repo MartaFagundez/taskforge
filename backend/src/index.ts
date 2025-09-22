@@ -4,6 +4,8 @@ import cors from 'cors';
 import * as z from 'zod';
 import { prisma } from './prisma';
 import { Prisma } from '@prisma/client';
+import { getUploadUrl, getDownloadUrl, S3_BUCKET } from './s3';
+import crypto from 'crypto';
 
 const app = express();
 app.use(cors({ origin: 'http://localhost:5173' }));
@@ -32,8 +34,37 @@ const IdParam = z.object({ id: z.coerce.number().int().positive() });
 const CreateProject = z.object({
   name: z.string().min(1, 'El nombre es requerido'),
 });
+const PresignUploadBody = z.object({
+  taskId: z.number().int().positive(),
+  originalName: z.string().min(1),
+  contentType: z.string().min(1),
+  size: z
+    .number()
+    .int()
+    .positive()
+    .max(parseInt(process.env.S3_UPLOAD_MAX_BYTES || '5242880')),
+});
+const PresignDownloadQuery = z.object({
+  key: z.string().min(1),
+});
+const RegisterBody = z.object({
+  taskId: z.number().int().positive(),
+  key: z.string().min(1),
+  originalName: z.string().min(1),
+  contentType: z.string().min(1),
+  size: z.number().int().positive(),
+});
 
-// Endpoints V2
+// Whitelist de MIME
+const allowedMime = (process.env.S3_ALLOWED_MIME || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+function isMimeAllowed(mt: string) {
+  return allowedMime.length === 0 || allowedMime.includes(mt);
+}
+
+// Endpoints
 // Listar proyectos
 app.get('/projects', async (_req, res) => {
   try {
@@ -224,6 +255,113 @@ app.delete('/tasks/:id', async (req, res) => {
       return res.status(404).json({ error: 'Task no encontrada' });
     }
     console.error('[DELETE /tasks/:id] error', err);
+    return res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+// Presign de subida
+// Devuelve la URL firmada y la key que se usará para subir
+app.post('/attachments/presign', async (req, res) => {
+  const parsed = PresignUploadBody.safeParse(req.body);
+  if (!parsed.success) {
+    const { formErrors, fieldErrors } = z.flattenError(parsed.error);
+    return res.status(400).json({ formErrors, fieldErrors });
+  }
+  const { taskId, originalName, contentType, size } = parsed.data;
+
+  try {
+    // verificar que task existe
+    const task = await prisma.task.findUnique({ where: { id: taskId } });
+    if (!task) return res.status(404).json({ error: 'Task no encontrada' });
+
+    if (!isMimeAllowed(contentType)) {
+      return res
+        .status(400)
+        .json({ error: `Content-Type no permitido (${contentType})` });
+    }
+
+    // Generar key única y “ordenada” por proyecto/tarea
+    //const ext = originalName.includes('.') ? originalName.split('.').pop() : '';
+    const safeName = originalName.replace(/[^\w.\-]+/g, '_').slice(0, 80);
+    const rand = crypto.randomBytes(8).toString('hex');
+    const key = `projects/${task.projectId}/tasks/${taskId}/${Date.now()}_${rand}_${safeName}`;
+
+    const url = await getUploadUrl(key, contentType, size);
+
+    return res.json({
+      bucket: S3_BUCKET,
+      key,
+      uploadUrl: url,
+      // el cliente necesita usar estos headers al hacer el PUT a S3 (para que coincida con la firma)
+      headers: { 'Content-Type': contentType },
+    });
+  } catch (err) {
+    console.error('[POST /attachments/presign] error', err);
+    return res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+// Registrar metadatos (después de subir a S3)
+app.post('/attachments/register', async (req, res) => {
+  const parsed = RegisterBody.safeParse(req.body);
+  if (!parsed.success) {
+    const { formErrors, fieldErrors } = z.flattenError(parsed.error);
+    return res.status(400).json({ formErrors, fieldErrors });
+  }
+  const { taskId, key, originalName, contentType, size } = parsed.data;
+
+  try {
+    const task = await prisma.task.findUnique({ where: { id: taskId } });
+    if (!task) return res.status(404).json({ error: 'Task no encontrada' });
+
+    const attachment = await prisma.attachment.create({
+      data: { taskId, key, originalName, contentType, size },
+    });
+    return res.status(201).json(attachment);
+  } catch (err) {
+    console.error('[POST /attachments/register] error', err);
+    return res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+// Listar adjuntos de una tarea
+app.get('/tasks/:id/attachments', async (req, res) => {
+  const parsed = IdParam.safeParse(req.params);
+  if (!parsed.success)
+    return res.status(400).json({ error: 'Parámetro id inválido' });
+  const { id } = parsed.data;
+
+  try {
+    const task = await prisma.task.findUnique({ where: { id } });
+    if (!task) return res.status(404).json({ error: 'Task no encontrada' });
+
+    const items = await prisma.attachment.findMany({
+      where: { taskId: id },
+      orderBy: { createdAt: 'desc' },
+    });
+    return res.json(items);
+  } catch (err) {
+    console.error('[GET /tasks/:id/attachments] error', err);
+    return res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+// Presign de descarga (link temporal para descargar desde S3)
+app.get('/attachments/download', async (req, res) => {
+  const parsed = PresignDownloadQuery.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: 'key requerida' });
+  const { key } = parsed.data;
+
+  try {
+    // Verificar que la key exista en la tabla Attachment
+    const exists = await prisma.attachment.findFirst({ where: { key } });
+    if (!exists)
+      return res.status(404).json({ error: 'Adjunto no registrado' });
+
+    const url = await getDownloadUrl(key);
+    return res.json({ url });
+  } catch (err) {
+    console.error('[GET /attachments/download] error', err);
     return res.status(500).json({ error: 'Error interno' });
   }
 });
