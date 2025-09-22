@@ -13,6 +13,10 @@ import {
   createTask,
   toggleTask,
   deleteTask,
+  listAttachments,
+  presignUpload,
+  registerAttachment,
+  presignDownload,
 } from './api';
 
 export default function App() {
@@ -143,7 +147,7 @@ export default function App() {
   // UI
   return (
     <div style={{ maxWidth: 860, margin: '2rem auto', padding: '0 1rem' }}>
-      <h1>TaskForge — V2</h1>
+      <h1>TaskForge — V3</h1>
 
       {/* Proyectos */}
       <section
@@ -280,6 +284,7 @@ export default function App() {
             >
               🗑️
             </button>
+            <AttachmentWidget taskId={t.id} />
           </li>
         ))}
       </ul>
@@ -308,6 +313,103 @@ export default function App() {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+function AttachmentWidget({ taskId }: { taskId: number }) {
+  const qc = useQueryClient();
+  const attsQ = useQuery({
+    queryKey: ['attachments', taskId],
+    queryFn: () => listAttachments(taskId),
+  });
+
+  const onFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Clear the input value immediately before async operations
+    e.currentTarget.value = '';
+
+    // 1) pedir URL firmada
+    const presigned = await presignUpload({
+      taskId,
+      originalName: file.name,
+      contentType: file.type || 'application/octet-stream',
+      size: file.size,
+    });
+
+    // 2) subir directo a S3 (PUT)
+    await fetch(presigned.uploadUrl, {
+      method: 'PUT',
+      headers: presigned.headers, // Content-Type
+      body: file,
+    });
+
+    // 3) registrar metadatos en backend
+    await registerAttachment({
+      taskId,
+      key: presigned.key,
+      originalName: file.name,
+      contentType: file.type || 'application/octet-stream',
+      size: file.size,
+    });
+
+    qc.invalidateQueries({ queryKey: ['attachments', taskId] });
+  };
+
+  const onDownload = async (key: string) => {
+    const url = await presignDownload(key);
+    window.open(url, '_blank');
+  };
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <label
+        style={{
+          display: 'inline-block',
+          padding: '4px 8px',
+          border: '1px solid #ccc',
+          borderRadius: 6,
+          cursor: 'pointer',
+        }}
+      >
+        ➕ Adjuntar
+        <input
+          type="file"
+          onChange={onFileChange}
+          style={{ display: 'none' }}
+        />
+      </label>
+
+      <ul
+        style={{
+          listStyle: 'none',
+          padding: 0,
+          marginTop: 8,
+          display: 'grid',
+          gap: 6,
+        }}
+      >
+        {(attsQ.data ?? []).map((att) => (
+          <li
+            key={att.id}
+            style={{ display: 'flex', gap: 8, alignItems: 'center' }}
+          >
+            <span
+              style={{
+                flex: 1,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {att.originalName}
+            </span>
+            <button onClick={() => onDownload(att.key)}>⬇️ Descargar</button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
