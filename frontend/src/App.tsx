@@ -1,78 +1,227 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { createTask, deleteTask, listTasks, toggleTask } from './api';
-import type { Task } from './api';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  keepPreviousData,
+} from '@tanstack/react-query';
+import type { Task, FilteredTasksResponse } from './api';
+import {
+  listProjects,
+  createProject,
+  listTasksByProject,
+  createTask,
+  toggleTask,
+  deleteTask,
+} from './api';
 
 export default function App() {
   const qc = useQueryClient();
-  const {
-    data: tasks,
-    isLoading,
-    isError,
-  } = useQuery({ queryKey: ['tasks'], queryFn: listTasks });
-  const [title, setTitle] = useState('');
 
-  const createMut = useMutation({
-    mutationFn: (t: string) => createTask(t),
-    onMutate: async (title) => {
-      await qc.cancelQueries({ queryKey: ['tasks'] });
-      const prev = qc.getQueryData<Task[]>(['tasks']) || [];
-      const optimistic: Task = {
-        id: Date.now(),
-        title,
-        done: false,
-        createdAt: new Date().toISOString(),
-      };
-      qc.setQueryData(['tasks'], [optimistic, ...prev]);
-      return { prev };
+  // estado de UI
+  const [selectedProject, setSelectedProject] = useState<number | null>(null);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [title, setTitle] = useState('');
+  const [q, setQ] = useState('');
+  const [status, setStatus] = useState<'all' | 'done' | 'pending'>('all');
+  const [page, setPage] = useState(1);
+  const limit = 10;
+
+  // proyectos
+  const projectsQ = useQuery({ queryKey: ['projects'], queryFn: listProjects });
+  useEffect(() => {
+    if (!selectedProject && projectsQ.data?.length) {
+      setSelectedProject(projectsQ.data[0].id);
+    }
+  }, [projectsQ.data, selectedProject]);
+
+  const createProjectMut = useMutation({
+    mutationFn: (name: string) => createProject(name),
+    onSuccess: (p) => {
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      setSelectedProject(p.id);
+      setNewProjectName('');
     },
-    onError: (_e, _v, ctx) => ctx?.prev && qc.setQueryData(['tasks'], ctx.prev),
-    onSettled: () => qc.invalidateQueries({ queryKey: ['tasks'] }),
+  });
+
+  // tasks (dependen de proyecto y filtros)
+  const tasksQ = useQuery({
+    enabled: !!selectedProject,
+    queryKey: ['tasks', selectedProject, { q, status, page, limit }],
+    queryFn: () =>
+      listTasksByProject(selectedProject!, { q, status, page, limit }),
+    placeholderData: keepPreviousData,
+  });
+
+  // mutations de tareas (usan el proyecto seleccionado)
+  const createTaskMut = useMutation({
+    mutationFn: (title: string) => createTask(selectedProject!, title),
+    onSuccess: () =>
+      qc.invalidateQueries({
+        queryKey: ['tasks', selectedProject, { q, status, page, limit }],
+      }),
   });
 
   const toggleMut = useMutation({
     mutationFn: (id: number) => toggleTask(id),
     onMutate: async (id) => {
-      await qc.cancelQueries({ queryKey: ['tasks'] });
-      const prev = qc.getQueryData<Task[]>(['tasks']) || [];
-      qc.setQueryData<Task[]>(
-        ['tasks'],
-        prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t)),
-      );
+      await qc.cancelQueries({
+        queryKey: ['tasks', selectedProject, { q, status, page, limit }],
+      });
+      const prev = qc.getQueryData<FilteredTasksResponse>([
+        'tasks',
+        selectedProject,
+        { q, status, page, limit },
+      ]);
+      if (prev) {
+        qc.setQueryData(
+          ['tasks', selectedProject, { q, status, page, limit }],
+          {
+            ...prev,
+            items: prev.items.map((t: Task) =>
+              t.id === id ? { ...t, done: !t.done } : t,
+            ),
+          },
+        );
+      }
       return { prev };
     },
-    onError: (_e, _v, ctx) => ctx?.prev && qc.setQueryData(['tasks'], ctx.prev),
-    onSettled: () => qc.invalidateQueries({ queryKey: ['tasks'] }),
+    onError: (_e, _v, ctx) =>
+      ctx?.prev &&
+      qc.setQueryData(
+        ['tasks', selectedProject, { q, status, page, limit }],
+        ctx.prev,
+      ),
+    onSettled: () =>
+      qc.invalidateQueries({
+        queryKey: ['tasks', selectedProject, { q, status, page, limit }],
+      }),
   });
 
   const deleteMut = useMutation({
     mutationFn: (id: number) => deleteTask(id),
     onMutate: async (id) => {
-      await qc.cancelQueries({ queryKey: ['tasks'] });
-      const prev = qc.getQueryData<Task[]>(['tasks']) || [];
-      qc.setQueryData<Task[]>(
-        ['tasks'],
-        prev.filter((t) => t.id !== id),
-      );
+      await qc.cancelQueries({
+        queryKey: ['tasks', selectedProject, { q, status, page, limit }],
+      });
+      const prev = qc.getQueryData<FilteredTasksResponse>([
+        'tasks',
+        selectedProject,
+        { q, status, page, limit },
+      ]);
+      if (prev) {
+        qc.setQueryData(
+          ['tasks', selectedProject, { q, status, page, limit }],
+          {
+            ...prev,
+            items: prev.items.filter((t: Task) => t.id !== id),
+            total: prev.total - 1,
+          },
+        );
+      }
       return { prev };
     },
-    onError: (_e, _v, ctx) => ctx?.prev && qc.setQueryData(['tasks'], ctx.prev),
-    onSettled: () => qc.invalidateQueries({ queryKey: ['tasks'] }),
+    onError: (_e, _v, ctx) =>
+      ctx?.prev &&
+      qc.setQueryData(
+        ['tasks', selectedProject, { q, status, page, limit }],
+        ctx.prev,
+      ),
+    onSettled: () =>
+      qc.invalidateQueries({
+        queryKey: ['tasks', selectedProject, { q, status, page, limit }],
+      }),
   });
 
-  const onSubmit = (e: React.FormEvent) => {
+  const onCreateTask = (e: React.FormEvent) => {
     e.preventDefault();
-    if (title.trim().length === 0) return;
-    createMut.mutate(title.trim());
+    if (!selectedProject || !title.trim()) return;
+    createTaskMut.mutate(title.trim());
     setTitle('');
   };
 
+  // UI
   return (
-    <div style={{ maxWidth: 720, margin: '2rem auto', padding: '0 1rem' }}>
-      <h1>TaskForge — V1</h1>
+    <div style={{ maxWidth: 860, margin: '2rem auto', padding: '0 1rem' }}>
+      <h1>TaskForge — V2</h1>
 
+      {/* Proyectos */}
+      <section
+        style={{
+          display: 'flex',
+          gap: 12,
+          alignItems: 'center',
+          marginBottom: 16,
+        }}
+      >
+        <label>
+          Proyecto:{' '}
+          <select
+            value={selectedProject ?? ''}
+            onChange={(e) => {
+              setSelectedProject(Number(e.target.value));
+              setPage(1);
+            }}
+          >
+            {(projectsQ.data ?? []).map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (newProjectName.trim())
+              createProjectMut.mutate(newProjectName.trim());
+          }}
+          style={{ display: 'flex', gap: 8 }}
+        >
+          <input
+            placeholder="Nuevo proyecto…"
+            value={newProjectName}
+            onChange={(e) => setNewProjectName(e.target.value)}
+          />
+          <button type="submit">Crear</button>
+        </form>
+      </section>
+
+      {/* Filtros */}
+      <section
+        style={{
+          display: 'flex',
+          gap: 12,
+          alignItems: 'center',
+          marginBottom: 16,
+        }}
+      >
+        <input
+          placeholder="Buscar por título…"
+          value={q}
+          onChange={(e) => {
+            setQ(e.target.value);
+            setPage(1);
+          }}
+          style={{ flex: 1, padding: 8 }}
+        />
+        <select
+          value={status}
+          onChange={(e) => {
+            setStatus(e.target.value as 'all' | 'done' | 'pending');
+            setPage(1);
+          }}
+        >
+          <option value="all">Todas</option>
+          <option value="pending">Pendientes</option>
+          <option value="done">Hechas</option>
+        </select>
+      </section>
+
+      {/* Crear tarea */}
       <form
-        onSubmit={onSubmit}
+        onSubmit={onCreateTask}
         style={{ display: 'flex', gap: 8, marginBottom: 16 }}
       >
         <input
@@ -81,14 +230,25 @@ export default function App() {
           placeholder="Nueva tarea…"
           style={{ flex: 1, padding: 8 }}
         />
-        <button type="submit">Agregar</button>
+        <button type="submit" disabled={!selectedProject}>
+          Agregar
+        </button>
       </form>
 
-      {isLoading && <p>Cargando…</p>}
-      {isError && <p style={{ color: 'red' }}>Error al cargar tareas</p>}
+      {/* Lista */}
+      {tasksQ.isLoading && <p>Cargando…</p>}
+      {tasksQ.isError && <p style={{ color: 'red' }}>Error al cargar tareas</p>}
 
-      <ul style={{ listStyle: 'none', padding: 0, display: 'grid', gap: 8 }}>
-        {(tasks || []).map((t) => (
+      <ul
+        style={{
+          listStyle: 'none',
+          padding: 0,
+          display: 'grid',
+          gap: 8,
+          minHeight: 120,
+        }}
+      >
+        {(tasksQ.data?.items ?? []).map((t) => (
           <li
             key={t.id}
             style={{
@@ -105,7 +265,6 @@ export default function App() {
               type="checkbox"
               checked={t.done}
               onChange={() => toggleMut.mutate(t.id)}
-              title="Marcar como hecha / deshacer"
             />
             <span
               style={{
@@ -124,6 +283,31 @@ export default function App() {
           </li>
         ))}
       </ul>
+
+      {/* Paginación */}
+      {tasksQ.data && tasksQ.data.pages > 1 && (
+        <div
+          style={{
+            display: 'flex',
+            gap: 8,
+            marginTop: 16,
+            alignItems: 'center',
+          }}
+        >
+          <button disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+            Anterior
+          </button>
+          <span>
+            Página {tasksQ.data.page} de {tasksQ.data.pages}
+          </span>
+          <button
+            disabled={page >= tasksQ.data.pages}
+            onClick={() => setPage((p) => p + 1)}
+          >
+            Siguiente
+          </button>
+        </div>
+      )}
     </div>
   );
 }
