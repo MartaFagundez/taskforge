@@ -18,13 +18,13 @@ model Project {
 }
 
 model Task {
-  id         Int          @id @default(autoincrement())
-  title      String
-  done       Boolean      @default(false)
-  createdAt  DateTime     @default(now())
-  projectId  Int
-  project    Project      @relation(fields: [projectId], references: [id])
-  Attachment Attachment[]
+  id          Int          @id @default(autoincrement())
+  title       String
+  done        Boolean      @default(false)
+  createdAt   DateTime     @default(now())
+  projectId   Int
+  project     Project      @relation(fields: [projectId], references: [id])
+  attachments Attachment[]
 
   @@index([projectId, createdAt])
   @@index([projectId, done])

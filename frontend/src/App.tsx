@@ -17,6 +17,7 @@ import {
   presignUpload,
   registerAttachment,
   presignDownload,
+  deleteAttachment,
 } from './api';
 
 export default function App() {
@@ -407,6 +408,16 @@ function AttachmentWidget({ taskId }: { taskId: number }) {
               {att.originalName}
             </span>
             <button onClick={() => onDownload(att.key)}>⬇️ Descargar</button>
+            <button
+              onClick={async () => {
+                if (!confirm('¿Eliminar adjunto definitivamente?')) return;
+                await deleteAttachment(att.id);
+                qc.invalidateQueries({ queryKey: ['attachments', taskId] });
+              }}
+              aria-label="Eliminar adjunto"
+            >
+              🗑️ Eliminar
+            </button>
           </li>
         ))}
       </ul>

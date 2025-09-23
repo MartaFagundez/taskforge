@@ -102,3 +102,7 @@ export async function listAttachments(taskId: number): Promise<Attachment[]> {
 export async function presignDownload(key: string): Promise<string> {
   return (await api.get('/attachments/download', { params: { key } })).data.url;
 }
+
+export async function deleteAttachment(id: number): Promise<void> {
+  await api.delete(`/attachments/${id}`);
+}
