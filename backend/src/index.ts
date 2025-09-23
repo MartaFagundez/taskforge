@@ -4,7 +4,13 @@ import cors from 'cors';
 import * as z from 'zod';
 import { prisma } from './prisma';
 import { Prisma } from '@prisma/client';
-import { getUploadUrl, getDownloadUrl, deleteObject, S3_BUCKET } from './s3';
+import {
+  getUploadUrl,
+  getDownloadUrl,
+  deleteObject,
+  S3_BUCKET,
+  deleteObjects,
+} from './s3';
 import crypto from 'crypto';
 
 const app = express();
@@ -236,29 +242,6 @@ app.patch('/tasks/:id/toggle', async (req, res) => {
   }
 });
 
-// Eliminar tarea
-app.delete('/tasks/:id', async (req, res) => {
-  const parsed = IdParam.safeParse(req.params);
-  if (!parsed.success) {
-    return res.status(400).json({ error: 'Parámetro id inválido' });
-  }
-  const { id } = parsed.data;
-
-  try {
-    await prisma.task.delete({ where: { id } });
-    return res.status(204).send();
-  } catch (err) {
-    if (
-      err instanceof Prisma.PrismaClientKnownRequestError &&
-      err.code === 'P2025'
-    ) {
-      return res.status(404).json({ error: 'Task no encontrada' });
-    }
-    console.error('[DELETE /tasks/:id] error', err);
-    return res.status(500).json({ error: 'Error interno' });
-  }
-});
-
 // Presign de subida
 // Devuelve la URL firmada y la key que se usará para subir
 app.post('/attachments/presign', async (req, res) => {
@@ -394,6 +377,57 @@ app.delete('/attachments/:id', async (req, res) => {
     return res.status(204).send();
   } catch (err) {
     console.error('[DELETE /attachments/:id] error', err);
+    return res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+// Eliminar una tarea y todos sus adjuntos (S3 + DB)
+// IMPORTANTE: este endpoint primero borra en S3 y si eso funciona, recién borra la Task.
+// Si S3 falla, la Task queda intacta (evita orfandad de archivos en S3).
+// Si la Task no existe, devuelve 404 y no toca S3.
+app.delete('/tasks/:id', async (req, res) => {
+  const parsed = IdParam.safeParse(req.params);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Parámetro id inválido' });
+  }
+  const { id } = parsed.data;
+
+  try {
+    // 1) Verificar la existencia de la Task y recolectar keys S3
+    const task = (await prisma.task.findUnique({
+      where: { id },
+      include: {
+        attachments: true,
+      } as any,
+    })) as any;
+
+    if (!task) return res.status(404).json({ error: 'Task no encontrada' });
+
+    const keys: string[] = (task.attachments ?? []).map((a: any) => a.key);
+
+    // 2) Borrar primero en S3 (si falla, no borra la Task)
+    try {
+      await deleteObjects(keys);
+    } catch (e) {
+      console.error('[DELETE /tasks/:id] S3 bulk delete error', e);
+      return res
+        .status(502)
+        .json({ error: 'No fue posible borrar archivos en S3' });
+    }
+
+    // 3) Borrar la Task (Attachments se borran por cascade en DB)
+    await prisma.task.delete({ where: { id } });
+
+    return res.status(204).send();
+  } catch (err) {
+    // Prisma P2025 si otra petición la borró “entre medio”
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === 'P2025'
+    ) {
+      return res.status(404).json({ error: 'Task no encontrada' });
+    }
+    console.error('[DELETE /tasks/:id] error', err);
     return res.status(500).json({ error: 'Error interno' });
   }
 });
