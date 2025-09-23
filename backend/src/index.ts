@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import * as z from 'zod';
-import { prisma } from './prisma';
+import { prisma } from './lib/prisma';
 import { Prisma } from '@prisma/client';
 import {
   getUploadUrl,
@@ -10,8 +10,15 @@ import {
   deleteObject,
   S3_BUCKET,
   deleteObjects,
-} from './s3';
+} from './lib/s3';
 import crypto from 'crypto';
+import { CreateProject } from './schemas/projects.schema';
+import { IdParam, CreateTask, ListTasksQuery } from './schemas/tasks.schema';
+import {
+  PresignUploadBody,
+  RegisterBody,
+  PresignDownloadQuery,
+} from './schemas/attachments.schema';
 
 const app = express();
 app.use(cors({ origin: 'http://localhost:5173' }));
@@ -23,42 +30,6 @@ app.get('/health', (_req, res) => {
     service: 'taskforge-backend',
     ts: new Date().toISOString(),
   });
-});
-
-// Zod schemas
-const CreateTask = z.object({
-  title: z.string().min(1, 'El título es requerido'),
-  projectId: z.number().int().positive('projectId inválido'),
-});
-const ListTasksQuery = z.object({
-  status: z.enum(['all', 'done', 'pending']).default('all'),
-  q: z.string().trim().optional(),
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(10),
-});
-const IdParam = z.object({ id: z.coerce.number().int().positive() });
-const CreateProject = z.object({
-  name: z.string().min(1, 'El nombre es requerido'),
-});
-const PresignUploadBody = z.object({
-  taskId: z.number().int().positive(),
-  originalName: z.string().min(1),
-  contentType: z.string().min(1),
-  size: z
-    .number()
-    .int()
-    .positive()
-    .max(parseInt(process.env.S3_UPLOAD_MAX_BYTES || '5242880')),
-});
-const PresignDownloadQuery = z.object({
-  key: z.string().min(1),
-});
-const RegisterBody = z.object({
-  taskId: z.number().int().positive(),
-  key: z.string().min(1),
-  originalName: z.string().min(1),
-  contentType: z.string().min(1),
-  size: z.number().int().positive(),
 });
 
 // Whitelist de MIME
