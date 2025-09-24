@@ -4,6 +4,7 @@ import { CreateTask, IdParam, ListTasksQuery } from '../schemas/tasks.schema';
 import * as projects from '../services/projects.service';
 import * as tasks from '../services/tasks.service';
 import { deleteObjects } from '../lib/s3';
+import { publishEventSafe } from '../lib/sns';
 
 // GET /tasks
 export const getTasks = async (_req: Request, res: Response) => {
@@ -30,6 +31,15 @@ export const postTask = async (req: Request, res: Response) => {
     parsed.data.title,
     parsed.data.projectId,
   );
+
+  void publishEventSafe('TaskCreated', {
+    id: created.id,
+    title: created.title,
+    projectId: created.projectId,
+    done: created.done,
+    createdAt: created.createdAt,
+  });
+
   res.status(201).json(created);
 };
 
@@ -41,6 +51,14 @@ export const patchToggleTask = async (req: Request, res: Response) => {
 
   const updated = await tasks.toggleTask(parsed.data.id);
   if (!updated) return res.status(404).json({ error: 'Task no encontrada' });
+
+  void publishEventSafe('TaskUpdated', {
+    id: updated.id,
+    done: updated.done,
+    projectId: updated.projectId,
+    updatedAt: new Date().toISOString(),
+  });
+
   res.json(updated);
 };
 
@@ -68,6 +86,12 @@ export const deleteTask = async (req: Request, res: Response) => {
   }
 
   await tasks.deleteTask(id);
+
+  void publishEventSafe('TaskDeleted', {
+    id,
+    deletedAt: new Date().toISOString(),
+  });
+
   res.status(204).send();
 };
 

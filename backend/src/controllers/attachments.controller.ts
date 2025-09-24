@@ -9,6 +9,7 @@ import {
 import * as tasks from '../services/tasks.service';
 import * as atts from '../services/attachments.service';
 import { getDownloadUrl, getUploadUrl, S3_BUCKET } from '../lib/s3';
+import { publishEventSafe } from '../lib/sns';
 
 const allowedMime = (process.env.S3_ALLOWED_MIME || '')
   .split(',')
@@ -73,6 +74,16 @@ export const postRegisterAttachment = async (req: Request, res: Response) => {
     contentType,
     size,
   });
+
+  void publishEventSafe('AttachmentAdded', {
+    id: attachment.id,
+    taskId,
+    key,
+    originalName,
+    size,
+    createdAt: attachment.createdAt,
+  });
+
   res.status(201).json(attachment);
 };
 
@@ -117,5 +128,11 @@ export const deleteAttachment = async (req: Request, res: Response) => {
   }
 
   await atts.deleteAttachmentById(parsed.data.id);
+
+  void publishEventSafe('AttachmentDeleted', {
+    id: parsed.data.id,
+    deletedAt: new Date().toISOString(),
+  });
+
   res.status(204).send();
 };
