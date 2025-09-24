@@ -5,20 +5,21 @@ import {
   useQueryClient,
   keepPreviousData,
 } from '@tanstack/react-query';
-import type { Task, FilteredTasksResponse } from './api';
+import type { Task, Paginated } from './types/index';
+import { listProjects, createProject } from './api/projects';
 import {
-  listProjects,
-  createProject,
   listTasksByProject,
   createTask,
   toggleTask,
   deleteTask,
+} from './api/tasks';
+import {
   listAttachments,
   presignUpload,
   registerAttachment,
   presignDownload,
   deleteAttachment,
-} from './api';
+} from './api/attachments';
 
 export default function App() {
   const qc = useQueryClient();
@@ -73,7 +74,7 @@ export default function App() {
       await qc.cancelQueries({
         queryKey: ['tasks', selectedProject, { q, status, page, limit }],
       });
-      const prev = qc.getQueryData<FilteredTasksResponse>([
+      const prev = qc.getQueryData<Paginated<Task>>([
         'tasks',
         selectedProject,
         { q, status, page, limit },
@@ -109,7 +110,7 @@ export default function App() {
       await qc.cancelQueries({
         queryKey: ['tasks', selectedProject, { q, status, page, limit }],
       });
-      const prev = qc.getQueryData<FilteredTasksResponse>([
+      const prev = qc.getQueryData<Paginated<Task>>([
         'tasks',
         selectedProject,
         { q, status, page, limit },
