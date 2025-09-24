@@ -8,8 +8,8 @@ import {
 } from '../api/attachments';
 
 export function useAttachments(taskId: number) {
-  const qc = useQueryClient();
-  const attsQ = useQuery({
+  const queryClient = useQueryClient();
+  const attsQuery = useQuery({
     queryKey: ['attachments', taskId],
     queryFn: () => listAttachments(taskId),
   });
@@ -33,7 +33,7 @@ export function useAttachments(taskId: number) {
       contentType: file.type || 'application/octet-stream',
       size: file.size,
     });
-    qc.invalidateQueries({ queryKey: ['attachments', taskId] });
+    queryClient.invalidateQueries({ queryKey: ['attachments', taskId] });
   };
 
   const download = async (key: string) => {
@@ -44,8 +44,8 @@ export function useAttachments(taskId: number) {
   const removeMut = useMutation({
     mutationFn: (id: number) => deleteAttachment(id),
     onSuccess: () =>
-      qc.invalidateQueries({ queryKey: ['attachments', taskId] }),
+      queryClient.invalidateQueries({ queryKey: ['attachments', taskId] }),
   });
 
-  return { attsQ, upload, download, removeMut };
+  return { attsQuery, upload, download, removeMut };
 }
