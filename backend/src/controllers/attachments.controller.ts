@@ -75,14 +75,20 @@ export const postRegisterAttachment = async (req: Request, res: Response) => {
     size,
   });
 
-  void publishEventSafe('AttachmentAdded', {
-    id: attachment.id,
-    taskId,
-    key,
-    originalName,
-    size,
-    createdAt: attachment.createdAt,
-  });
+  const cid = (req as any).cid;
+
+  void publishEventSafe(
+    'AttachmentAdded',
+    {
+      id: attachment.id,
+      taskId,
+      key,
+      originalName,
+      size,
+      createdAt: attachment.createdAt,
+    },
+    cid,
+  );
 
   res.status(201).json(attachment);
 };
@@ -129,10 +135,16 @@ export const deleteAttachment = async (req: Request, res: Response) => {
 
   await atts.deleteAttachmentById(parsed.data.id);
 
-  void publishEventSafe('AttachmentDeleted', {
-    id: parsed.data.id,
-    deletedAt: new Date().toISOString(),
-  });
+  const cid = (req as any).cid;
+
+  void publishEventSafe(
+    'AttachmentDeleted',
+    {
+      id: parsed.data.id,
+      deletedAt: new Date().toISOString(),
+    },
+    cid,
+  );
 
   res.status(204).send();
 };
