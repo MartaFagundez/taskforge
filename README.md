@@ -1,9 +1,9 @@
 # TaskForge
 
-Gestor minimalista de **proyectos y tareas**. Desde **V3.x** incorpora **adjuntos por tarea con S3 (presigned URLs)** y eliminación segura de archivos.
+Gestor minimalista de **proyectos y tareas** desarrollado con enfoque iterativo.
 
-> Tecnologías: **React + Vite + TS**, **Node + Express + TS**, **Prisma + SQLite** (migrable a Postgres).  
-> Próximas versiones: SNS (eventos), Lambda + API Gateway, RDS Postgres + RDS Proxy.
+> Tecnologías: **React + Vite + TS**, **Tailwind v4**, **React Query** · **Node + Express + TS**, **Zod**, **Prisma** (SQLite; migrable a Postgres) · **AWS S3** (presigned) · **AWS SNS** (eventos).  
+> Próximas versiones: **Lambda + API Gateway** (V5), **RDS Postgres + RDS Proxy** (V8).
 
 ---
 
@@ -17,6 +17,7 @@ Gestor minimalista de **proyectos y tareas**. Desde **V3.x** incorpora **adjunto
 - [Configuración](#configuración)
 - [Modelo de datos](#modelo-de-datos)
 - [API (contratos)](#api-contratos)
+- [Eventos (SNS)](#eventos-sns)
 - [UX / Frontend](#ux--frontend)
 - [Rendimiento y seguridad](#rendimiento-y-seguridad)
 - [Roadmap](#roadmap)
@@ -28,19 +29,17 @@ Gestor minimalista de **proyectos y tareas**. Desde **V3.x** incorpora **adjunto
 ## Arquitectura
 
 ```
-frontend (Vite, React Query)
-  │  fetch
-  ▼
-backend (Express, Zod, Prisma)
-  │
-  ├─ S3 (presigned PUT/GET para adjuntos)   ← V3.0/3.1
-  ▼
-DB (SQLite en V2–V3; Postgres/RDS en V8)
+frontend (Vite, React, Tailwind v4, React Query)
+    │ fetch
+    ▼
+backend (Express, Zod, Prisma) ← V3.2 modularizado en capas (routes/controllers/services/schemas)
+    │
+    ├─ S3 (presigned PUT/GET/DELETE para adjuntos) ← V3.0–V3.1
+    └─ SNS (publish de eventos: TaskCreated/Updated/Deleted, AttachmentAdded/Deleted) ← V4.0
 
-[A futuro]
-- SNS (eventos TaskCreated/Updated → emails / workers)
-- Lambda + API Gateway (endpoints serverless)
-- RDS Postgres + RDS Proxy (pooling)
+[Próximas]
+- API Gateway + Lambda (V5) para endpoints stateless (health/presign...)
+- RDS Postgres + RDS Proxy (V8)
 ```
 
 ---
@@ -48,9 +47,12 @@ DB (SQLite en V2–V3; Postgres/RDS en V8)
 ## Estado de versiones
 
 - **V1**: CRUD de tareas para un único “proyecto” implícito.
-- **V2**: **Projects** (crear/listar) + **Tasks por proyecto** con **búsqueda** (`q`), **filtro** (`all|pending|done`) y **paginación** (`page`, `limit`). Índices en DB.
-- **V3.0**: Adjuntos por tarea con **S3 (presigned)**: subir directo, registrar metadatos, listar y descargar.
-- **V3.1 (actual)**: **Eliminar** adjuntos individuales y **limpieza S3 en cascada** al borrar una Task.
+- **V2**: **Projects** (crear/listar) + **Tasks por proyecto** con **búsqueda** (`q`), **filtro** (`all|pending|done`) y **paginación** (`page`, `limit`).
+- **V3.0**: Adjuntos con **S3 (presigned)**: subir, registrar, listar, descargar.
+- **V3.1**: **Eliminar adjuntos** individuales + **limpieza S3 en cascada** al borrar una Task.
+- **V3.2**: **Backend modularizado** (app/server, routes, controllers, services, schemas, middlewares).
+- **V3.3**: **Tailwind v4** + **refactor UI** a **componentes** y **hooks**.
+- **V4.0**: **Eventos con SNS** en creación/actualización/borrado de tareas y adjuntos (fire‑and‑forget, tolerante a fallos).
 
 ---
 
@@ -59,7 +61,8 @@ DB (SQLite en V2–V3; Postgres/RDS en V8)
 - **Node** ≥ 20
 - **npm** ≥ 10
 - **Git**
-- (Para V3.x) **Cuenta AWS** con permisos S3 sobre un bucket privado
+- **Cuenta AWS** (S3 para V3.x; SNS para V4.0)
+- (opcional para V5) Permisos para **CloudFormation/Lambda/API Gateway** si despliegas con Serverless Framework
 
 ---
 
@@ -76,11 +79,11 @@ npm install
 # 3) Backend: crear DB y levantar
 cd backend
 npx prisma migrate dev --name v2_projects_and_indexes
-npm run dev    # http://localhost:3000/health
+npm run dev        # http://localhost:3000/health
 
-# 4) Frontend
+# 4) Frontend (Vite + Tailwind v4)
 cd ../frontend
-npm run dev    # http://localhost:5173/
+npm run dev        # http://localhost:5173/
 ```
 
 > Script combinado (raíz): `npm run dev` levanta front y back en paralelo.
@@ -91,20 +94,34 @@ npm run dev    # http://localhost:5173/
 
 ```
 taskforge/
-├─ backend/              # Express + TS + Prisma
+├─ backend/                # Express + TS + Prisma (V3.2 modular)
 │  ├─ src/
-│  │  ├─ index.ts        # rutas /health, /projects, /tasks, /attachments...
-│  │  ├─ prisma.ts       # PrismaClient
-│  │  └─ s3.ts           # helpers S3: getUploadUrl/getDownloadUrl/delete/deleteBulk
-│  ├─ prisma/
-│  │  ├─ schema.prisma
-│  │  └─ migrations/
-│  └─ .env               # DATABASE_URL, AWS_REGION, S3_BUCKET, etc.
-├─ frontend/             # Vite + React + TS + React Query
+│  │  ├─ app.ts            # crea app, CORS/JSON, monta rutas
+│  │  ├─ server.ts         # levanta el servidor
+│  │  ├─ routes/           # health, projects, tasks, attachments
+│  │  ├─ controllers/      # orquestación + validaciones
+│  │  ├─ services/         # Prisma/S3/SNS "puro"
+│  │  ├─ schemas/          # Zod schemas (CreateTask, ListTasksQuery, etc.)
+│  │  ├─ middlewares/      # error handler, correlation id (opcional)
+│  │  └─ lib/
+│  │     ├─ prisma.ts      # PrismaClient
+│  │     ├─ s3.ts          # helpers S3: presigned, delete, deleteBulk
+│  │     └─ sns.ts         # publishEvent(_Safe) a SNS (V4.0)
+│  └─ prisma/
+│     ├─ schema.prisma
+│     └─ migrations/
+│
+├─ frontend/               # Vite + React + TS + Tailwind v4 + React Query (V3.3)
 │  └─ src/
+│     ├─ pages/TasksPage.tsx
+│     ├─ components/ (ProjectSelect, FiltersBar, TaskList, TaskItem, AttachmentWidget)
+│     ├─ hooks/ (useProjects, useTasks, useAttachments)
+│     ├─ api/ (client, projects, tasks, attachments)
+│     ├─ types/
 │     ├─ App.tsx
-│     └─ api.ts
-└─ infra/                # (placeholder) IaC: SAM/Serverless/CDK en V5+
+│     └─ index.css         # `@import "tailwindcss";` + utilidades
+│
+└─ infra/                  # (placeholder) IaC para V5+
 ```
 
 ---
@@ -116,38 +133,50 @@ taskforge/
 ```env
 # DB (SQLite por ahora)
 DATABASE_URL="file:./dev.db"
+PORT=3000
+CORS_ORIGIN=http://localhost:5173
 
-# AWS S3 (V3.x)
+# AWS S3 & SNS
 AWS_REGION=xxxxxxxx
 AWS_ACCESS_KEY_ID=xxxxxxxx
 AWS_SECRET_ACCESS_KEY=xxxxxxxx
 S3_BUCKET=xxxxxxxx
 S3_UPLOAD_MAX_BYTES=5242880
 S3_ALLOWED_MIME=image/png,image/jpeg,application/pdf
+SNS_TOPIC_ARN=arn:aws:sns:<your_region>:<your_account_id>:<your_topic_name>
 ```
 
-**CORS (backend/src/index.ts):**
+**CORS**
 
-- Origen permitido por defecto: `http://localhost:5173` (ajusta si el front cambia).
-- Métodos usados: `GET, POST, PATCH, DELETE`.
+- Origen por defecto: `http://localhost:5173`
+- Métodos: `GET, POST, PATCH, DELETE`
 
-**IAM mínima sugerida (para el backend):**
+**IAM mínima sugerida (backend):**
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "VisualEditor0",
+      "Sid": "AllowS3ObjectOps",
       "Effect": "Allow",
-      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
-      "Resource": "arn:aws:s3:::<TU_BUCKET>/*"
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject",
+        "s3:AbortMultipartUpload"
+      ],
+      "Resource": "arn:aws:s3:::<S3_BUCKET>/*"
+    },
+    {
+      "Sid": "AllowPublishToTaskforgeTopic",
+      "Effect": "Allow",
+      "Action": ["sns:Publish"],
+      "Resource": "arn:aws:sns:<your_region>:<your_account_id>:<your_topic_name>"
     }
   ]
 }
 ```
-
-Reemplaza `<TU_BUCKET>`.
 
 ---
 
@@ -170,22 +199,26 @@ Task {
   done Boolean (default: false)
   createdAt DateTime
   projectId Int FK -> Project.id
+
   Indexes:
-    - (projectId, createdAt)
-    - (projectId, done)
-    - (projectId, title)
+  - (projectId, createdAt)
+  - (projectId, done)
+  - (projectId, title)
+
+  attachments Attachment[]
 }
 
 Attachment {
   id Int PK
-  taskId Int FK -> Task.id  (onDelete: Cascade)
-  key String        // clave en S3
+  taskId Int FK -> Task.id (onDelete: Cascade)
+  key String   // clave en S3
   originalName String
   contentType String
   size Int
   createdAt DateTime
+
   Indexes:
-    - (taskId, createdAt)
+  - (taskId, createdAt)
 }
 ```
 
@@ -195,67 +228,65 @@ Attachment {
 
 ## API (contratos)
 
-Base URL: `http://localhost:3000`
+Base URL local (Express): `http://localhost:3000`
 
 ### Health
 
-`GET /health` → `200 { ok: true, service, ts }`
+- `GET /health` → `200 { ok: true, service, ts }`
 
 ### Projects
 
 - `GET /projects` → `200 Project[]`
-- `POST /projects`
-  - **Body:** `{ "name": "Mi proyecto" }`
-  - **Res:** `201 Project`
+- `POST /projects` → **Body** `{ "name": "Mi proyecto" }` → **201** `Project`
 
 ### Tasks
 
-- `POST /tasks`
-  - **Body:** `{ "title":"Tarea A", "projectId": 1 }` → `201 Task`
-- `PATCH /tasks/:id/toggle` → `200 Task` (done ↔ not done)
-- `DELETE /tasks/:id` → `204`
-  - **Comportamiento (V3.1):** antes de eliminar la Task en DB, se borran en **S3 (bulk)** todas las `key` de sus adjuntos (los registros `Attachment` caen por `onDelete: Cascade`).
-
-- `GET /projects/:id/tasks?status=all|pending|done&q=texto&page=1&limit=10`
-  - **Res:** `200 { items: Task[], page, limit, total, pages }`
+- `POST /tasks` → **Body** `{ "title":"Tarea A", "projectId": 1 }` → **201** `Task`
+- `PATCH /tasks/:id/toggle` → **200** `Task` (done ↔ not done)
+- `DELETE /tasks/:id` → **204`**  
+  **Comportamiento (V3.1):** antes de eliminar en DB, se borran en **S3 (bulk)** las `key` de adjuntos; los registros `Attachment` caen por `onDelete: Cascade`.
+- `GET /projects/:id/tasks?status=all|pending|done&q=texto&page=1&limit=10` → **200** `{ items, page, limit, total, pages }`
 
 ### Attachments (V3.x)
 
-- **Presign de subida**
-  - `POST /attachments/presign`
-  - **Body:** `{ taskId, originalName, contentType, size }`
-  - **Res:** `{ bucket, key, uploadUrl, headers }`
-  - **Uso:** el front hace **PUT** a `uploadUrl` con `headers` (incluye `Content-Type`), y el archivo como `body`.
-- **Registrar metadatos (post-subida)**
-  - `POST /attachments/register`
-  - **Body:** `{ taskId, key, originalName, contentType, size }`
-  - **Res:** `201 Attachment`
-- **Listar adjuntos de una tarea**
-  - `GET /tasks/:id/attachments` → `200 Attachment[]`
-- **Presign de descarga**
-  - `GET /attachments/download?key=...` → `200 { url }`
-- **Eliminar adjunto (V3.1)**
-  - `DELETE /attachments/:id` → `204`
-  - **Comportamiento:** borra primero el objeto en **S3** y luego el registro en DB.
+- **Presign de subida**  
+  `POST /attachments/presign` → **Body** `{ taskId, originalName, contentType, size }` → **Res** `{ bucket, key, uploadUrl, headers }`  
+  _Uso:_ el front hace **PUT** a `uploadUrl` con `headers` (incluye `Content-Type`), y el archivo como cuerpo.
+- **Registrar metadatos (post‑subida)**  
+  `POST /attachments/register` → **201** `Attachment`
+- **Listar adjuntos de una tarea**  
+  `GET /tasks/:id/attachments` → **200** `Attachment[]`
+- **Presign de descarga**  
+  `GET /attachments/download?key=...` → **200** `{ url }`
+- **Eliminar adjunto (V3.1)**  
+  `DELETE /attachments/:id` → **204**  
+  _Orden:_ primero S3, luego DB.
 
-**Errores comunes:**
+**Errores comunes:**  
+`400` validación (Zod) · `404` recurso/página inexistente · `502` fallo al borrar objeto en S3 · `500` error no controlado (logeado).
 
-- `400` validación (Zod).
-- `404` recurso inexistente (p. ej., proyecto/tarea/adjunto no encontrado, página fuera de rango).
-- `502` fallo al eliminar objeto en S3 (al borrar attachment/task).
-- `500` error no controlado (registrado en logs).
+---
+
+## Eventos (SNS)
+
+En **V4.0** el backend publica **eventos** de forma **no bloqueante** (fire‑and‑forget). Si `SNS_TOPIC_ARN` no está configurado, el publish se omite y se **loguea**.
+
+- **TaskCreated** `{ id, title, projectId, done, createdAt, cid? }`
+- **TaskUpdated** `{ id, done, projectId, updatedAt, cid? }`
+- **TaskDeleted** `{ id, deletedAt, cid? }`
+- **AttachmentAdded** `{ id, taskId, key, originalName, size, createdAt, cid? }`
+- **AttachmentDeleted** `{ id, deletedAt, cid? }`
+
+> **Correlation ID (`cid`)**: middleware opcional añade `cid` a `req` y se propaga en `MessageAttributes` y payload para trazabilidad en logs/consumidores.
 
 ---
 
 ## UX / Frontend
 
-- **React Query** para fetching y **optimistic updates** en create/toggle/delete de tareas.
-- **Selector de proyecto**, **búsqueda** por título, **filtro de estado**, **paginación** (10 ítems por página).
-- **Adjuntos por tarea (V3.x):**
-  - Subir archivo: presign → PUT a S3 → registrar → refrescar lista.
-  - Descargar: presign de descarga → abrir URL temporal.
-  - Eliminar: `DELETE /attachments/:id` con confirmación.
-- Estilos simples inline; se prioriza claridad del flujo.
+- **React Query** para fetching y **optimistic updates** (create/toggle/delete).
+- **Tailwind v4** integrado con Vite (plugin `@tailwindcss/vite`, `@import "tailwindcss";`).
+- Componentización (V3.3): `ProjectSelect`, `FiltersBar`, `TaskList`, `TaskItem`, `AttachmentWidget`.
+- **Flujos de adjuntos**: presign → PUT a S3 → registrar → refrescar lista; descarga con presign; delete con confirmación.
 
 ---
 
@@ -265,28 +296,26 @@ Base URL: `http://localhost:3000`
 - **Paginación** `offset/limit` (en V7 se evaluará **keyset** si crece el dataset).
 - **Validación** con Zod y códigos HTTP correctos.
 - **CORS** restringido al front local.
-- **S3** (V3.x):
-  - Bucket **privado** y presigned URLs de corta duración.
-  - Validación de **MIME** (`S3_ALLOWED_MIME`) y **tamaño** (`S3_UPLOAD_MAX_BYTES`).
-  - `key` generada en backend (evita colisiones y path traversal).
-  - **Orden de borrado**: primero S3, luego DB (evita huérfanos).
-  - (Futuro) Borrado masivo por proyecto antes de permitir `DELETE /projects/:id`.
+- **S3**: bucket **privado**, presigned URLs de caducidad corta; whitelist de **MIME** (`S3_ALLOWED_MIME`) y **tamaño** (`S3_UPLOAD_MAX_BYTES`); `key` generada en backend; **orden de borrado**: primero S3, luego DB.
+- **SNS**: publicación **tolerante a fallos** (publish seguro), `MessageAttributes` para `event` y `cid`.
 
 ---
 
 ## Roadmap
 
-- **V4**: Eventos con **SNS** (email suscriptor).
-- **V5**: **Lambda + API Gateway** (2 endpoints críticos) + observabilidad.
+- **V5**: **Lambda + API Gateway** (2 endpoints stateless) + observabilidad.
 - **V6**: Auth JWT (roles mínimos).
 - **V7**: Performance (keyset pagination, cache) + rate limiting.
-- **V8**: **RDS Postgres + RDS Proxy** (pooling), Secrets Manager, IaC.
+- **V8**: **RDS Postgres + RDS Proxy**, Secrets Manager, IaC.
 
 ---
 
 ## Changelog
 
-- **v3.1.0**: Eliminación de adjuntos + limpieza S3 al borrar Task (bulk), nuevos códigos de error (`502` para fallo S3).
+- **v4.0.0**: **SNS events** (TaskCreated/Updated/Deleted, AttachmentAdded/Deleted), publish seguro, soporte `cid`.
+- **v3.3.0**: **Tailwind v4** + **UI refactor** (componentes y hooks).
+- **v3.2.0**: **Backend modularizado** (app/server, routes, controllers, services, schemas).
+- **v3.1.0**: Eliminar adjuntos + limpieza S3 al borrar Task (bulk), códigos `502` en fallo S3.
 - **v3.0.0**: Adjuntos: presigned upload/download, registro y listado.
 - **v2.0.0**: Proyectos, listado de tareas por proyecto con búsqueda/filtros/paginación; índices DB; UI con selector de proyecto.
 - **v1.0.0**: CRUD mínimo de tareas, optimistic UI.
